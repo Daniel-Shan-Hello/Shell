@@ -8,7 +8,7 @@
  *  Follow the 15-213/18-213/15-513 style guide at
  *  http://www.cs.cmu.edu/~213/codeStyle.html.>
  *
- * @author Your Name <andrewid@andrew.cmu.edu>
+ * @author Yuyang Shan yuyangsh@andrew.cmu.edu
  * TODO: Include your name and Andrew ID here.
  */
 
@@ -52,6 +52,8 @@ void sigtstp_handler(int sig);
 void sigint_handler(int sig);
 void sigquit_handler(int sig);
 void cleanup(void);
+
+void child_process(const char *cmdline, parseline_return parse_result, struct cmdline_tokens token);
 
 /**
  * @brief <Write main's function header documentation. What does main do?>
@@ -160,6 +162,44 @@ int main(int argc, char **argv) {
     return -1; // control never reaches here
 }
 
+void child_process(const char *cmdline, parseline_return parse_result, struct cmdline_tokens token){
+    pid_t pid = fork();
+    if (pid < 0){ //fork failed
+        return;
+    }
+    if (pid == 0){ //this is a the child_process
+        execve(token.argv[0], token.argv, environ);
+        sio_printf("Incorrect Commend\n");
+        exit(1);
+    }
+    else{//parent_process
+        sigset_t mask, prev_mask;
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGCHLD);
+        sigaddset(&mask, SIGINT);
+        sigaddset(&mask, SIGTSTP);
+        //is foreground job
+        if (parse_result == PARSELINE_FG){
+            sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+            add_job(pid,FG,cmdline);
+            waitpid(pid, NULL, 0);
+            jid_t jid = job_from_pid(pid);
+            jid = jid;
+            delete_job(jid);
+            sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+        }
+        //is background job
+        else{
+            sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+            add_job(pid,BG,cmdline);
+            jid_t jid = job_from_pid(pid);
+            sio_printf("[%d] (%d) %s\n", jid, pid, cmdline);
+            sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+            return;
+        }
+    }
+}
+
 /**
  * @brief <What does eval do?>
  *
@@ -180,7 +220,18 @@ void eval(const char *cmdline) {
         return;
     }
 
-    // TODO: Implement commands here.
+    //Is a build_in command
+    if (token.builtin != BUILTIN_NONE){
+        if (token.builtin == BUILTIN_QUIT){
+            exit(0);
+        }
+        if (token.builtin == BUILTIN_JOBS){
+        }
+    }
+    else{ //is not a builtin command
+        child_process(cmdline,parse_result, token);
+    }
+
 }
 
 /*****************
