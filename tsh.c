@@ -54,7 +54,10 @@ void sigquit_handler(int sig);
 void cleanup(void);
 
 void child_process(const char *cmdline, parseline_return parse_result, struct cmdline_tokens token);
+void do_bgfg(char** argv);
 
+
+volatile int fg_reap;
 /**
  * @brief <Write main's function header documentation. What does main do?>
  *
@@ -161,6 +164,10 @@ int main(int argc, char **argv) {
 
     return -1; // control never reaches here
 }
+void do_bgfg(char** argv){
+    
+}
+
 
 void child_process(const char *cmdline, parseline_return parse_result, struct cmdline_tokens token){
     pid_t pid = fork();
@@ -182,10 +189,10 @@ void child_process(const char *cmdline, parseline_return parse_result, struct cm
         if (parse_result == PARSELINE_FG){
             sigprocmask(SIG_BLOCK, &mask, &prev_mask);
             add_job(pid,FG,cmdline);
-            waitpid(pid, NULL, 0);
-            jid_t jid = job_from_pid(pid);
-            jid = jid;
-            delete_job(jid);
+            fg_reap = 0;
+            while (!fg_reap){
+                sigsuspend(!prev_mask)
+            }
             sigprocmask(SIG_SETMASK, &prev_mask, NULL);
         }
         //is background job
@@ -212,6 +219,11 @@ void child_process(const char *cmdline, parseline_return parse_result, struct cm
 void eval(const char *cmdline) {
     parseline_return parse_result;
     struct cmdline_tokens token;
+    sigset_t mask, prev_mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTSTP);
 
     // Parse command line
     parse_result = parseline(cmdline, &token);
@@ -226,6 +238,12 @@ void eval(const char *cmdline) {
             exit(0);
         }
         if (token.builtin == BUILTIN_JOBS){
+            sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+            list_jobs(STDOUT_FILENO);
+            sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+        }
+        if (token.builtin == BUILTIN_FG || token.builtin == BUILTIN_BG){
+            do_bgfg(token.argv);
         }
     }
     else{ //is not a builtin command
@@ -243,21 +261,86 @@ void eval(const char *cmdline) {
  *
  * TODO: Delete this comment and replace it with your own.
  */
-void sigchld_handler(int sig) {}
+void sigchld_handler(int sig) {
+    int prev_errno = errno;
+    sigset_t mask, prev_mask;
+    pid_t pid;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTSTP);
+    sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+
+    int status;
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0){
+        jid_t foreground = fg_job();
+        if (goreground != 0 && pid == job_get_pid(foreground)){
+            fg_reap = 1;
+        }
+        jid_t job_id = job_from_pid(pid);
+        if (WIFEXITED(status)){
+            delete_job(job_id);
+        }
+        if (WIFSIGNALED(status)){
+            delete_job(job_id);
+            sio_printf("Job [%d] (%d)  is terminated by signal: %d\n", job_id, pid, WTERMSIG(status))
+        }
+        if (WIFSTOPPED(status)){
+            job_set_state(job_id, ST);
+            sio_printf("Job [%d] (%d) is stopped by signal: %d\n", job_id, pid,WSTOPSIG(status))
+        }
+    }
+    sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+    errno = prev_errno;
+}
 
 /**
- * @brief <What does sigint_handler do?>
+ * @brief Deal with Ctrl-C, SIGINT
  *
  * TODO: Delete this comment and replace it with your own.
  */
-void sigint_handler(int sig) {}
+void sigint_handler(int sig) {
+    int prev_errno = errno;
+    sigset_t mask, prev_mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigaddset(&mask, SIGTSTP);
+    sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+
+    jid_t foreground = fg_job();
+
+    if (!job_exists(foreground)) return;
+
+    pid_t fg_pid = job_get_pid(foreground);
+    kill(-fg_pid, SIGINT);
+
+    sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+    errno = prev_errno;
+}
 
 /**
- * @brief <What does sigtstp_handler do?>
+ * @brief Deal with Ctrl-Z, SIGSTP
  *
  * TODO: Delete this comment and replace it with your own.
  */
-void sigtstp_handler(int sig) {}
+void sigtstp_handler(int sig){
+    int prev_errno = errno;
+    sigset_t mask, prev_mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigaddset(&mask, SIGINT);
+    sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+
+    jid_t foreground = fg_job();
+
+    if (!job_exists(foreground)) return;
+
+    pid_t fg_pid = job_get_pid(foreground);
+    kill(-fg_pid, SIGTSTP);
+
+    sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+    errno = prev_errno;
+}
+
 
 /**
  * @brief Attempt to clean up global resources when the program exits.
