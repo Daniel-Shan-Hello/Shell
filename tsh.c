@@ -201,13 +201,13 @@ void do_bgfg(struct cmdline_tokens token){
     else if (isdigit(first_arg[0])){ //some kind of number, not random stuff
         pid = (pid_t)atoi(first_arg);
         if (pid == 0){
-            sio_printf("Incorrect PID");
+            sio_printf("(%d): No such process\n", pid);
             sigprocmask(SIG_SETMASK, &prev_mask, NULL);
             return;
         }
         jid = job_from_pid(pid);
         if (!job_exists(jid)){
-            sio_printf("Incorrect JID");
+            sio_printf("%s: No such job\n", first_arg);
             sigprocmask(SIG_SETMASK, &prev_mask, NULL);
             return;
         }
@@ -221,10 +221,10 @@ void do_bgfg(struct cmdline_tokens token){
     if (token.builtin == BUILTIN_FG){
         fg_reap = 0;
         job_set_state(jid, FG);
-        sigprocmask(SIG_SETMASK, &prev_mask, NULL);
         while (!fg_reap) {
             sigsuspend(&prev_mask);
         }
+        sigprocmask(SIG_SETMASK, &prev_mask, NULL);
     }
     else if(token.builtin == BUILTIN_BG){
         job_set_state(jid, BG);
@@ -256,8 +256,8 @@ void child_process(const char *cmdline, parseline_return parse_result, struct cm
     else{//parent_process
         //is foreground job
         if (parse_result == PARSELINE_FG){
-            add_job(pid,FG,cmdline);
             fg_reap = 0;
+            add_job(pid,FG,cmdline);
             while (!fg_reap){
                 sigsuspend(&prev_mask);
             }
@@ -343,15 +343,17 @@ void sigchld_handler(int sig) {
             fg_reap = 1;
         }
         jid_t job_id = job_from_pid(pid);
+
         if (!job_exists(job_id)) continue;
+        
         if (WIFEXITED(status)){
             delete_job(job_id);
         }
-        if (WIFSIGNALED(status)){
+        else if (WIFSIGNALED(status)){
             delete_job(job_id);
             sio_printf("Job [%d] (%d) terminated by signal %d\n", job_id, pid, WTERMSIG(status));
         }
-        if (WIFSTOPPED(status)){
+        else if (WIFSTOPPED(status)){
             job_set_state(job_id, ST);
             sio_printf("Job [%d] (%d) stopped by signal %d\n", job_id, pid,WSTOPSIG(status));
         }
